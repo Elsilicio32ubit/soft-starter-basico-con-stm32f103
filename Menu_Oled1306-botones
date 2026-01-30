@@ -1,0 +1,1151 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+#include "ssd1306.h"
+#include "fonts.h"
+#include "imagenes.h"
+#include "delays.h"
+
+#include "stdio.h"
+#include "stdint.h"
+#include "stdlib.h"
+#include "string.h"
+
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+char palabras[16]; // sprint maximo 16 letras por pantalla
+
+//menu principal
+#define MENU_TOTAL_OPCIONES    9
+#define MENU_VISIBLE_OPCIONES  3
+
+typedef enum{
+    MENU_PRINCIPAL,
+    MENU_OPCION,
+    SUBMENU_TIPO_BOOT,
+    SUBMENU_I_MAX_BOOT,
+    SUBMENU_I_MAX,
+    SUBMENU_I_STOP,
+    SUBMENU_I_F1,
+    SUBMENU_I_F2,
+    SUBMENU_I_F3,
+    SUBMENU_UPKEEP,
+    SUBMENU_UPKEEP_CHANGE_PASS
+}MenuState_t;
+
+MenuState_t menu_state = MENU_PRINCIPAL;
+
+uint8_t menu_index  = 0;   // opción seleccionada
+uint8_t menu_offset = 0;   // inicio de ventana visible
+
+/* Texto del menú (≤11 caracteres) */
+const char *menu_items[MENU_TOTAL_OPCIONES] = {
+    " Tipo_Boot ",
+    " I Max Boot",
+    " I MAX ",
+    " I Stop ",
+    " I-F1 ",
+    " I-F2 ",
+    " I-F3 ",
+    " Alarmas ",
+    " Upkeep "
+};
+
+typedef enum {
+    TIPO_MONO_F = 0,
+    TIPO_BI_F = 1,
+    TIPO_TRI_F = 2
+} TipoBoot_t;
+
+TipoBoot_t tipo_boot_seleccionado = TIPO_MONO_F;
+uint8_t tipo_boot_index = 0;
+
+const char *tipo_boot_items[3] = {
+    "Mono_F",
+    "Bi_F",
+    "Tri_F"
+};
+
+uint8_t i_max_boot_corriente = 0;      // 0-50 Amperios
+uint8_t i_max_boot_tiempo = 0;         // Tiempo de estabilización
+uint8_t i_max_boot_campo = 0;          // 0=corriente, 1=tiempo
+
+uint8_t i_max_corriente[3] = {0, 0, 0};  // Para mono_F, Bi_F, Tri_F
+uint8_t i_max_tiempo[3] = {0, 0, 0};     // Para mono_F, Bi_F, Tri_F
+uint8_t i_max_campo = 0;                  // 0=corriente, 1=tiempo
+uint8_t i_max_fase_sel = 0;               // Fase seleccionada para editar
+
+uint8_t i_stop_corriente = 0;          // 0-50 Amperios para paro de emergencia
+
+float i_f1_valor = 0.0f;
+float i_f2_valor = 0.0f;
+float i_f3_valor = 0.0f;
+
+#define PASSWORD_LENGTH 4
+uint8_t password_actual[PASSWORD_LENGTH] = {1, 2, 3, 4};  // Contraseña por defecto: 1234
+uint8_t password_ingresada[PASSWORD_LENGTH] = {0, 0, 0, 0};
+uint8_t password_nueva[PASSWORD_LENGTH] = {0, 0, 0, 0};
+uint8_t password_pos = 0;               // Posición actual del dígito
+uint8_t password_verificada = 0;        // 1 si la contraseña fue verificada
+uint8_t cambiar_password_mode = 0;      // 1 si está en modo cambiar contraseña
+
+/* ===================== VECTOR DE CONFIGURACION EN MEMORIA ===================== */
+/*
+ * Estructura del vector de configuración:
+ * [0]  = tipo_boot_seleccionado (0=Mono_F, 1=Bi_F, 2=Tri_F)
+ * [1]  = i_max_boot_corriente (0-50)
+ * [2]  = i_max_boot_tiempo (0-50)
+ * [3]  = i_max_corriente[0] - Mono_F (0-50)
+ * [4]  = i_max_corriente[1] - Bi_F (0-50)
+ * [5]  = i_max_corriente[2] - Tri_F (0-50)
+ * [6]  = i_max_tiempo[0] - Mono_F (0-50)
+ * [7]  = i_max_tiempo[1] - Bi_F (0-50)
+ * [8]  = i_max_tiempo[2] - Tri_F (0-50)
+ * [9]  = i_stop_corriente (0-50)
+ * [10] = password_actual[0]
+ * [11] = password_actual[1]
+ * [12] = password_actual[2]
+ * [13] = password_actual[3]
+ * [14-17] = Reservado para valores flotantes I_F1 (4 bytes float)
+ * [18-21] = Reservado para valores flotantes I_F2 (4 bytes float)
+ * [22-25] = Reservado para valores flotantes I_F3 (4 bytes float)
+ */
+
+#define CONFIG_VECTOR_SIZE 26
+uint8_t config_vector[CONFIG_VECTOR_SIZE];
+
+// Función para actualizar el vector con los valores actuales
+void Config_Update_Vector(void)
+{
+    config_vector[0] = (uint8_t)tipo_boot_seleccionado;
+    config_vector[1] = i_max_boot_corriente;
+    config_vector[2] = i_max_boot_tiempo;
+    config_vector[3] = i_max_corriente[0];
+    config_vector[4] = i_max_corriente[1];
+    config_vector[5] = i_max_corriente[2];
+    config_vector[6] = i_max_tiempo[0];
+    config_vector[7] = i_max_tiempo[1];
+    config_vector[8] = i_max_tiempo[2];
+    config_vector[9] = i_stop_corriente;
+    config_vector[10] = password_actual[0];
+    config_vector[11] = password_actual[1];
+    config_vector[12] = password_actual[2];
+    config_vector[13] = password_actual[3];
+
+    // Guardar floats como bytes (para I_F1, I_F2, I_F3)
+    memcpy(&config_vector[14], &i_f1_valor, sizeof(float));
+    memcpy(&config_vector[18], &i_f2_valor, sizeof(float));
+    memcpy(&config_vector[22], &i_f3_valor, sizeof(float));
+}
+
+// Función para cargar valores desde el vector
+void Config_Load_From_Vector(void)
+{
+    tipo_boot_seleccionado = (TipoBoot_t)config_vector[0];
+    i_max_boot_corriente = config_vector[1];
+    i_max_boot_tiempo = config_vector[2];
+    i_max_corriente[0] = config_vector[3];
+    i_max_corriente[1] = config_vector[4];
+    i_max_corriente[2] = config_vector[5];
+    i_max_tiempo[0] = config_vector[6];
+    i_max_tiempo[1] = config_vector[7];
+    i_max_tiempo[2] = config_vector[8];
+    i_stop_corriente = config_vector[9];
+    password_actual[0] = config_vector[10];
+    password_actual[1] = config_vector[11];
+    password_actual[2] = config_vector[12];
+    password_actual[3] = config_vector[13];
+
+    // Cargar floats desde bytes
+    memcpy(&i_f1_valor, &config_vector[14], sizeof(float));
+    memcpy(&i_f2_valor, &config_vector[18], sizeof(float));
+    memcpy(&i_f3_valor, &config_vector[22], sizeof(float));
+}
+
+// Función para inicializar el vector con valores por defecto
+void Config_Init_Default(void)
+{
+    memset(config_vector, 0, CONFIG_VECTOR_SIZE);
+    config_vector[0] = TIPO_MONO_F;  // Tipo boot por defecto
+    config_vector[10] = 1;           // Password: 1234
+    config_vector[11] = 2;
+    config_vector[12] = 3;
+    config_vector[13] = 4;
+    Config_Load_From_Vector();
+}
+
+// Función para obtener puntero al vector (útil para guardar en EEPROM/Flash)
+uint8_t* Config_Get_Vector(void)
+{
+    Config_Update_Vector();
+    return config_vector;
+}
+
+// Función para obtener el tamaño del vector
+uint8_t Config_Get_Vector_Size(void)
+{
+    return CONFIG_VECTOR_SIZE;
+}
+
+uint8_t valores1=0, valores2=0;
+
+#define BTN_ABAJO   (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12) == GPIO_PIN_RESET)
+#define BTN_ARRIBA  (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13) == GPIO_PIN_RESET)
+
+volatile uint8_t flag_btn_sel = 0;
+volatile uint8_t flag_btn_atras = 0;
+
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+/* USER CODE BEGIN PV */
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_I2C1_Init(void);
+/* USER CODE BEGIN PFP */
+/* USER CODE BEGIN PFP */
+void Menu_Draw(uint8_t index, uint8_t offset);
+void Opcion_Draw(uint8_t index);
+void menu(void);
+
+void Submenu_TipoBoot_Draw(void);
+void Submenu_TipoBoot_Handle(void);
+void Submenu_IMaxBoot_Draw(void);
+void Submenu_IMaxBoot_Handle(void);
+void Submenu_IMax_Draw(void);
+void Submenu_IMax_Handle(void);
+void Submenu_IStop_Draw(void);
+void Submenu_IStop_Handle(void);
+void Submenu_IF_Draw(uint8_t fase);
+void Submenu_Upkeep_Draw(void);
+void Submenu_Upkeep_Handle(void);
+void Submenu_Upkeep_ChangePass_Draw(void);
+void Submenu_Upkeep_ChangePass_Handle(void);
+uint8_t Verificar_Password(void);
+
+// Funciones de configuración
+void Config_Update_Vector(void);
+void Config_Load_From_Vector(void);
+void Config_Init_Default(void);
+uint8_t* Config_Get_Vector(void);
+uint8_t Config_Get_Vector_Size(void);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if(GPIO_Pin == GPIO_PIN_14)  // Botón SEL
+    {
+        flag_btn_sel = 1;
+    }
+    else if(GPIO_Pin == GPIO_PIN_15)  // Botón ATRAS
+    {
+        flag_btn_atras = 1;
+    }
+}
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_I2C1_Init();
+  /* USER CODE BEGIN 2 */
+  OLED_init();
+
+
+  	  OLED_print_text_inv(0,0, "Soft",&font2);
+  	  OLED_print_text_inv(0,3, "starte",&font2);
+ 	  HAL_Delay(2000);
+
+
+		//OLED_print_text(0,4,"carga",&font2);
+
+
+
+ 	    //OLED_print_text(0,4,"CANAL",&font4);
+ 	    //HAL_Delay(1000);
+
+ 	    //OLED_clear_screen();
+
+ 	    //OLED_DrawBitmap(0, 20,44,45,miperro, NOR,NO);
+ 	    //OLED_DrawBitmap(64, 20,44,40,perrillo, NOR,NO);
+	  	//sprintf(palabras,"%d",valores1);
+
+
+
+ 	    //OLED_Draw_Rectangle(50, 40, 60, 60, FILL, nor, ROUND);
+ 	    //OLED_clear_screen();
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+	  menu();
+	  HAL_Delay(100);
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+
+void menu(void){
+    switch(menu_state)
+    {
+        /* =============== MENU PRINCIPAL =============== */
+        case MENU_PRINCIPAL:
+            Menu_Draw(menu_index, menu_offset);
+
+            if(BTN_ARRIBA)
+            {
+                if(menu_index < MENU_TOTAL_OPCIONES-1)
+                {
+                    menu_index++;
+                    if(menu_index >= menu_offset + MENU_VISIBLE_OPCIONES)
+                        menu_offset++;
+                }
+                HAL_Delay(200);
+            }
+
+            if(BTN_ABAJO)
+            {
+                if(menu_index > 0)
+                {
+                    menu_index--;
+                    if(menu_index < menu_offset)
+                        menu_offset--;
+                }
+                HAL_Delay(200);
+            }
+
+            if(flag_btn_sel)
+            {
+                flag_btn_sel = 0;  // Limpiar flag
+                // Ir al submenú correspondiente
+                switch(menu_index)
+                {
+                    case 0: menu_state = SUBMENU_TIPO_BOOT; tipo_boot_index = tipo_boot_seleccionado; break;
+                    case 1: menu_state = SUBMENU_I_MAX_BOOT; i_max_boot_campo = 0; break;
+                    case 2: menu_state = SUBMENU_I_MAX; i_max_campo = 0; i_max_fase_sel = 0; break;
+                    case 3: menu_state = SUBMENU_I_STOP; break;
+                    case 4: menu_state = SUBMENU_I_F1; break;
+                    case 5: menu_state = SUBMENU_I_F2; break;
+                    case 6: menu_state = SUBMENU_I_F3; break;
+                    case 7: menu_state = MENU_OPCION; break;  // Alarmas (sin cambios)
+                    case 8:
+                        menu_state = SUBMENU_UPKEEP;
+                        password_pos = 0;
+                        password_verificada = 0;
+                        cambiar_password_mode = 0;
+                        memset(password_ingresada, 0, PASSWORD_LENGTH);
+                        break;
+                }
+                HAL_Delay(200);
+            }
+        break;
+
+        /* =============== PANTALLA OPCION GENERICA =============== */
+        case MENU_OPCION:
+            Opcion_Draw(menu_index);
+
+            if(flag_btn_sel || flag_btn_atras)
+            {
+                flag_btn_sel = 0;
+                flag_btn_atras = 0;
+                menu_state = MENU_PRINCIPAL;
+                HAL_Delay(200);
+            }
+        break;
+
+        /* =============== SUBMENU TIPO BOOT =============== */
+        case SUBMENU_TIPO_BOOT:
+            Submenu_TipoBoot_Draw();
+            Submenu_TipoBoot_Handle();
+        break;
+
+        /* =============== SUBMENU I MAX BOOT =============== */
+        case SUBMENU_I_MAX_BOOT:
+            Submenu_IMaxBoot_Draw();
+            Submenu_IMaxBoot_Handle();
+        break;
+
+        /* =============== SUBMENU I MAX =============== */
+        case SUBMENU_I_MAX:
+            Submenu_IMax_Draw();
+            Submenu_IMax_Handle();
+        break;
+
+        /* =============== SUBMENU I STOP =============== */
+        case SUBMENU_I_STOP:
+            Submenu_IStop_Draw();
+            Submenu_IStop_Handle();
+        break;
+
+        /* =============== SUBMENU I-F1 =============== */
+        case SUBMENU_I_F1:
+            Submenu_IF_Draw(0);
+            if(flag_btn_atras || flag_btn_sel)
+            {
+                flag_btn_atras = 0;
+                flag_btn_sel = 0;
+                menu_state = MENU_PRINCIPAL;
+                HAL_Delay(200);
+            }
+        break;
+
+        /* =============== SUBMENU I-F2 =============== */
+        case SUBMENU_I_F2:
+            Submenu_IF_Draw(1);
+            if(flag_btn_atras || flag_btn_sel)
+            {
+                flag_btn_atras = 0;
+                flag_btn_sel = 0;
+                menu_state = MENU_PRINCIPAL;
+                HAL_Delay(200);
+            }
+        break;
+
+        /* =============== SUBMENU I-F3 =============== */
+        case SUBMENU_I_F3:
+            Submenu_IF_Draw(2);
+            if(flag_btn_atras || flag_btn_sel)
+            {
+                flag_btn_atras = 0;
+                flag_btn_sel = 0;
+                menu_state = MENU_PRINCIPAL;
+                HAL_Delay(200);
+            }
+        break;
+
+        /* =============== SUBMENU UPKEEP =============== */
+        case SUBMENU_UPKEEP:
+            Submenu_Upkeep_Draw();
+            Submenu_Upkeep_Handle();
+        break;
+
+        /* =============== SUBMENU CAMBIAR PASSWORD =============== */
+        case SUBMENU_UPKEEP_CHANGE_PASS:
+            Submenu_Upkeep_ChangePass_Draw();
+            Submenu_Upkeep_ChangePass_Handle();
+        break;
+    }
+}
+
+/* ===================== FUNCIONES ===================== */
+
+void Menu_Draw(uint8_t index, uint8_t offset)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(20,0," MENU ",&font1);
+
+    for(uint8_t i = 0; i < MENU_VISIBLE_OPCIONES; i++)
+    {
+        uint8_t item = offset + i;
+
+        if(item < MENU_TOTAL_OPCIONES)
+        {
+            uint8_t y = 2 + (i * 2);   // Y válidos: 2,4,6
+
+            if(item == index)
+            {
+                OLED_print_text_inv(0, y, ">", &font1);
+                OLED_print_text_inv(8, y, menu_items[item], &font1);
+            }
+            else
+            {
+                OLED_print_text(8, y, menu_items[item], &font1);
+            }
+        }
+    }
+}
+
+void Opcion_Draw(uint8_t index)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0,0, menu_items[index], &font1);
+    OLED_print_text(0,6,"ATRAS=Salir",&font1);
+}
+
+/* ===================== SUBMENU TIPO BOOT ===================== */
+void Submenu_TipoBoot_Draw(void)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0, 0, " Tipo_Boot ", &font1);
+
+    for(uint8_t i = 0; i < 3; i++)
+    {
+        uint8_t y = 2 + (i * 2);
+        if(i == tipo_boot_index)
+        {
+            OLED_print_text_inv(0, y, ">", &font1);
+            OLED_print_text_inv(8, y, tipo_boot_items[i], &font1);
+        }
+        else
+        {
+            OLED_print_text(8, y, tipo_boot_items[i], &font1);
+        }
+    }
+}
+
+void Submenu_TipoBoot_Handle(void)
+{
+    if(BTN_ARRIBA)
+    {
+        if(tipo_boot_index < 2)
+            tipo_boot_index++;
+        HAL_Delay(200);
+    }
+
+    if(BTN_ABAJO)
+    {
+        if(tipo_boot_index > 0)
+            tipo_boot_index--;
+        HAL_Delay(200);
+    }
+
+    if(flag_btn_sel)
+    {
+        flag_btn_sel = 0;
+        tipo_boot_seleccionado = (TipoBoot_t)tipo_boot_index;
+        Config_Update_Vector();  // Actualizar vector al guardar
+        menu_state = MENU_PRINCIPAL;
+        HAL_Delay(200);
+    }
+
+    if(flag_btn_atras)
+    {
+        flag_btn_atras = 0;
+        menu_state = MENU_PRINCIPAL;
+        HAL_Delay(200);
+    }
+}
+
+/* ===================== SUBMENU I MAX BOOT ===================== */
+void Submenu_IMaxBoot_Draw(void)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0, 0, " I Max Boot", &font1);
+
+    // Campo corriente
+    if(i_max_boot_campo == 0)
+        OLED_print_text_inv(0, 2, ">", &font1);
+    sprintf(palabras, "I: %02d A", i_max_boot_corriente);
+    OLED_print_text(8, 2, palabras, &font1);
+
+    // Campo tiempo
+    if(i_max_boot_campo == 1)
+        OLED_print_text_inv(0, 4, ">", &font1);
+    sprintf(palabras, "T: %02d s", i_max_boot_tiempo);
+    OLED_print_text(8, 4, palabras, &font1);
+
+    OLED_print_text(0, 6, "SEL=Campo", &font1);
+}
+
+void Submenu_IMaxBoot_Handle(void)
+{
+    if(BTN_ARRIBA)
+    {
+        if(i_max_boot_campo == 0)
+        {
+            if(i_max_boot_corriente < 50)
+                i_max_boot_corriente++;
+        }
+        else
+        {
+            if(i_max_boot_tiempo < 50)
+                i_max_boot_tiempo++;
+        }
+        HAL_Delay(150);
+    }
+
+    if(BTN_ABAJO)
+    {
+        if(i_max_boot_campo == 0)
+        {
+            if(i_max_boot_corriente > 0)
+                i_max_boot_corriente--;
+        }
+        else
+        {
+            if(i_max_boot_tiempo > 0)
+                i_max_boot_tiempo--;
+        }
+        HAL_Delay(150);
+    }
+
+    if(flag_btn_sel)
+    {
+        flag_btn_sel = 0;
+        i_max_boot_campo = (i_max_boot_campo + 1) % 2;
+        HAL_Delay(200);
+    }
+
+    if(flag_btn_atras)
+    {
+        flag_btn_atras = 0;
+        Config_Update_Vector();  // Actualizar vector al salir
+        menu_state = MENU_PRINCIPAL;
+        HAL_Delay(200);
+    }
+}
+
+/* ===================== SUBMENU I MAX ===================== */
+void Submenu_IMax_Draw(void)
+{
+    OLED_clear_screen();
+
+    // Mostrar título con fase actual
+    sprintf(palabras, "I MAX-%s", tipo_boot_items[tipo_boot_seleccionado]);
+    OLED_print_text_inv(0, 0, palabras, &font1);
+
+    // Mostrar campos según el tipo de boot
+    uint8_t fases_visibles = tipo_boot_seleccionado + 1;  // 1, 2 o 3 fases
+
+    // Campo corriente
+    if(i_max_campo == 0)
+        OLED_print_text_inv(0, 2, ">", &font1);
+    sprintf(palabras, "I: %02d A", i_max_corriente[tipo_boot_seleccionado]);
+    OLED_print_text(8, 2, palabras, &font1);
+
+    // Campo tiempo
+    if(i_max_campo == 1)
+        OLED_print_text_inv(0, 4, ">", &font1);
+    sprintf(palabras, "T: %02d s", i_max_tiempo[tipo_boot_seleccionado]);
+    OLED_print_text(8, 4, palabras, &font1);
+
+    OLED_print_text(0, 6, "SEL=Campo", &font1);
+}
+
+void Submenu_IMax_Handle(void)
+{
+    if(BTN_ARRIBA)
+    {
+        if(i_max_campo == 0)
+        {
+            if(i_max_corriente[tipo_boot_seleccionado] < 50)
+                i_max_corriente[tipo_boot_seleccionado]++;
+        }
+        else
+        {
+            if(i_max_tiempo[tipo_boot_seleccionado] < 50)
+                i_max_tiempo[tipo_boot_seleccionado]++;
+        }
+        HAL_Delay(150);
+    }
+
+    if(BTN_ABAJO)
+    {
+        if(i_max_campo == 0)
+        {
+            if(i_max_corriente[tipo_boot_seleccionado] > 0)
+                i_max_corriente[tipo_boot_seleccionado]--;
+        }
+        else
+        {
+            if(i_max_tiempo[tipo_boot_seleccionado] > 0)
+                i_max_tiempo[tipo_boot_seleccionado]--;
+        }
+        HAL_Delay(150);
+    }
+
+    if(flag_btn_sel)
+    {
+        flag_btn_sel = 0;
+        i_max_campo = (i_max_campo + 1) % 2;
+        HAL_Delay(200);
+    }
+
+    if(flag_btn_atras)
+    {
+        flag_btn_atras = 0;
+        Config_Update_Vector();  // Actualizar vector al salir
+        menu_state = MENU_PRINCIPAL;
+        HAL_Delay(200);
+    }
+}
+
+/* ===================== SUBMENU I STOP ===================== */
+void Submenu_IStop_Draw(void)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0, 0, " I Stop ", &font1);
+
+    OLED_print_text(0, 2, "Paro Emerg:", &font1);
+    sprintf(palabras, "I: %02d A", i_stop_corriente);
+    OLED_print_text_inv(0, 4, palabras, &font1);
+
+    OLED_print_text(0, 6, "ATRAS=Salir", &font1);
+}
+
+void Submenu_IStop_Handle(void)
+{
+    if(BTN_ARRIBA)
+    {
+        if(i_stop_corriente < 50)
+            i_stop_corriente++;
+        HAL_Delay(150);
+    }
+
+    if(BTN_ABAJO)
+    {
+        if(i_stop_corriente > 0)
+            i_stop_corriente--;
+        HAL_Delay(150);
+    }
+
+    if(flag_btn_atras || flag_btn_sel)
+    {
+        flag_btn_atras = 0;
+        flag_btn_sel = 0;
+        Config_Update_Vector();  // Actualizar vector al salir
+        menu_state = MENU_PRINCIPAL;
+        HAL_Delay(200);
+    }
+}
+
+/* ===================== SUBMENU I-F1, I-F2, I-F3 ===================== */
+void Submenu_IF_Draw(uint8_t fase)
+{
+    OLED_clear_screen();
+
+    // Verificar si la fase es válida según el tipo de boot
+    uint8_t fases_disponibles = tipo_boot_seleccionado + 1;
+
+    sprintf(palabras, " I-F%d ", fase + 1);
+    OLED_print_text_inv(0, 0, palabras, &font1);
+
+    if(fase < fases_disponibles)
+    {
+        float valor = 0.0f;
+        switch(fase)
+        {
+            case 0: valor = i_f1_valor; break;
+            case 1: valor = i_f2_valor; break;
+            case 2: valor = i_f3_valor; break;
+        }
+
+        sprintf(palabras, "%.2f A", valor);
+        OLED_print_text(0, 3, palabras, &font1);
+    }
+    else
+    {
+        OLED_print_text(0, 3, "No Disp.", &font1);
+        sprintf(palabras, "Req: %s", tipo_boot_items[fase]);
+        OLED_print_text(0, 5, palabras, &font1);
+    }
+
+    OLED_print_text(0, 6, "ATRAS=Salir", &font1);
+}
+
+/* ===================== SUBMENU UPKEEP ===================== */
+void Submenu_Upkeep_Draw(void)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0, 0, " Upkeep ", &font1);
+
+    if(!password_verificada)
+    {
+        OLED_print_text(0, 2, "Password:", &font1);
+
+        // Mostrar dígitos ingresados
+        char pass_display[16] = "";
+        for(uint8_t i = 0; i < PASSWORD_LENGTH; i++)
+        {
+            if(i == password_pos)
+                sprintf(pass_display + strlen(pass_display), "[%d]", password_ingresada[i]);
+            else
+                sprintf(pass_display + strlen(pass_display), " %d ", password_ingresada[i]);
+        }
+        OLED_print_text(0, 4, pass_display, &font1);
+
+        OLED_print_text(0, 6, "SEL=Sig ATR=Salir", &font1);
+    }
+    else
+    {
+        OLED_print_text(0, 2, "ACCESO OK", &font1);
+        OLED_print_text(0, 4, "SEL+ATRAS", &font1);
+        OLED_print_text(0, 6, "=Cambi.Pass", &font1);
+        //OLED_print_text(0, 6, "ATRAS=Salir", &font1);
+    }
+}
+
+void Submenu_Upkeep_Handle(void)
+{
+    if(flag_btn_atras && !flag_btn_sel)
+    {
+        flag_btn_atras = 0;
+        menu_state = MENU_PRINCIPAL;
+        password_verificada = 0;
+        password_pos = 0;
+        memset(password_ingresada, 0, PASSWORD_LENGTH);
+        HAL_Delay(200);
+        return;
+    }
+
+    if(!password_verificada)
+    {
+        if(BTN_ARRIBA)
+        {
+            if(password_ingresada[password_pos] < 9)
+                password_ingresada[password_pos]++;
+            else
+                password_ingresada[password_pos] = 0;
+            HAL_Delay(200);
+        }
+
+        if(BTN_ABAJO)
+        {
+            if(password_ingresada[password_pos] > 0)
+                password_ingresada[password_pos]--;
+            else
+                password_ingresada[password_pos] = 9;
+            HAL_Delay(200);
+        }
+
+        if(flag_btn_sel)
+        {
+            flag_btn_sel = 0;
+            if(password_pos < PASSWORD_LENGTH - 1)
+            {
+                password_pos++;
+            }
+            else
+            {
+                // Verificar contraseña
+                if(Verificar_Password())
+                {
+                    password_verificada = 1;
+                }
+                else
+                {
+                    // Reset si es incorrecta pero NO sale del menú
+                    memset(password_ingresada, 0, PASSWORD_LENGTH);
+                    password_pos = 0;
+                }
+            }
+            HAL_Delay(200);
+        }
+    }
+    else
+    {
+        // Ya verificada - comprobar combinación SEL+ATRAS para cambiar password
+        if(flag_btn_sel && flag_btn_atras)
+        {
+            flag_btn_sel = 0;
+            flag_btn_atras = 0;
+            menu_state = SUBMENU_UPKEEP_CHANGE_PASS;
+            password_pos = 0;
+            memset(password_nueva, 0, PASSWORD_LENGTH);
+            HAL_Delay(300);
+        }
+    }
+}
+
+/* ===================== SUBMENU CAMBIAR PASSWORD ===================== */
+void Submenu_Upkeep_ChangePass_Draw(void)
+{
+    OLED_clear_screen();
+    OLED_print_text_inv(0, 0, "Nueva Pass", &font1);
+
+    // Mostrar dígitos de nueva contraseña
+    char pass_display[16] = "";
+    for(uint8_t i = 0; i < PASSWORD_LENGTH; i++)
+    {
+        if(i == password_pos)
+            sprintf(pass_display + strlen(pass_display), "[%d]", password_nueva[i]);
+        else
+            sprintf(pass_display + strlen(pass_display), " %d ", password_nueva[i]);
+    }
+    OLED_print_text(0, 3, pass_display, &font1);
+
+    OLED_print_text(0, 6, "SEL=Guardar", &font1);
+}
+
+void Submenu_Upkeep_ChangePass_Handle(void)
+{
+    if(flag_btn_atras)
+    {
+        flag_btn_atras = 0;
+        menu_state = SUBMENU_UPKEEP;
+        password_pos = 0;
+        HAL_Delay(200);
+        return;
+    }
+
+    if(BTN_ARRIBA)
+    {
+        if(password_nueva[password_pos] < 9)
+            password_nueva[password_pos]++;
+        else
+            password_nueva[password_pos] = 0;
+        HAL_Delay(200);
+    }
+
+    if(BTN_ABAJO)
+    {
+        if(password_nueva[password_pos] > 0)
+            password_nueva[password_pos]--;
+        else
+            password_nueva[password_pos] = 9;
+        HAL_Delay(200);
+    }
+
+    if(flag_btn_sel)
+    {
+        flag_btn_sel = 0;
+        if(password_pos < PASSWORD_LENGTH - 1)
+        {
+            password_pos++;
+        }
+        else
+        {
+            // Guardar nueva contraseña
+            memcpy(password_actual, password_nueva, PASSWORD_LENGTH);
+            Config_Update_Vector();  // Actualizar vector al guardar nueva contraseña
+            menu_state = SUBMENU_UPKEEP;
+            password_pos = 0;
+        }
+        HAL_Delay(200);
+    }
+}
+
+/* ===================== VERIFICAR PASSWORD ===================== */
+uint8_t Verificar_Password(void)
+{
+    for(uint8_t i = 0; i < PASSWORD_LENGTH; i++)
+    {
+        if(password_ingresada[i] != password_actual[i])
+            return 0;
+    }
+    return 1;
+}
+
+
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PC13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB12 PB13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
